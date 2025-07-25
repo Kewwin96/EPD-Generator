@@ -18,27 +18,54 @@ columns_to_extract = {
 print("Loading BOM...")
 bom_df = pd.read_excel(INPUT_FILE)
 
+def get_material_match_index(i, df):
+    current_level = df.iloc[i]['Lvl']
+    current_unit = str(df.iloc[i]['U/M']).strip().lower()
+
+    prev_level = df.iloc[i - 1]['Lvl'] if i > 0 else None
+    next_level = df.iloc[i + 1]['Lvl'] if i + 1 < len(df) else None
+    prev_unit = str(df.iloc[i - 1]['U/M']).strip().lower() if i > 0 else ''
+    next_unit = str(df.iloc[i + 1]['U/M']).strip().lower() if i + 1 < len(df) else ''
+
+    component_units = {'pcs', 'm', 'm3'}
+    material_unit = 'kg'
+
+    if current_level == 1 and current_unit in component_units:
+        if next_level == 2 and next_unit == material_unit:
+            return i + 1
+
+    if current_level == 2 and prev_level == 1 and current_unit == material_unit:
+        return i - 1
+
+    if current_level == 2 and next_level == 3 and next_unit == material_unit:
+        return i + 1
+
+    if current_level == 3 and prev_level == 2 and current_unit == material_unit:
+        return i - 1
+
+    if current_level == 3 and next_level == 4 and next_unit == material_unit:
+        return i + 1
+
+    if current_level == 4 and prev_level == 3 and current_unit == material_unit:
+        return i - 1
+
+    return None
+
+
 # Determine type of each row (single, paired, skip)
 def classify_rows(df):
     classifications = []
     for i in range(len(df)):
-        level = df.iloc[i]['Lvl']
-        unit = str(df.iloc[i]['U/M']).strip().lower()
+        matched_index = get_material_match_index(i, df)
 
-        prev_level = df.iloc[i - 1]['Lvl'] if i > 0 else None
-        next_level = df.iloc[i + 1]['Lvl'] if i + 1 < len(df) else None
-        next_unit = str(df.iloc[i + 1]['U/M']).strip().lower() if i + 1 < len(df) else ''
-
-        if level == 1 and unit in ['pcs', 'm', 'm3']:
-            if next_level == 2 and next_unit == 'kg':
-                classifications.append('paired')
-            else:
-                classifications.append('single')
-        elif level == 2 and prev_level == 1 and unit == 'kg':
+        if matched_index == i + 1:
+            classifications.append('paired')
+        elif matched_index is not None and matched_index < i:
             classifications.append('skip')
         else:
-            classifications.append('single')  # fallback
+            classifications.append('single')
     return classifications
+
 
 # Add a new classification column
 bom_df['row_type'] = classify_rows(bom_df)
