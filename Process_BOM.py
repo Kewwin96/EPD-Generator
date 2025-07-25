@@ -1,7 +1,7 @@
 import pandas as pd
 
 # ======= CONFIGURATION =======
-INPUT_FILE = "BOM.xlsx"
+INPUT_FILE = "BOM_2.xlsx"
 OUTPUT_FILE = "output.xlsx"
 
 # Mapping of output columns:
@@ -22,12 +22,12 @@ bom_df = pd.read_excel(INPUT_FILE)
 def classify_rows(df):
     classifications = []
     for i in range(len(df)):
-        level = df.iloc[i]['Level'] if 'Level' in df.columns else None
-        unit = str(df.iloc[i]['Unit']).strip().lower() if 'Unit' in df.columns else ''
-        
-        prev_level = df.iloc[i - 1]['Level'] if i > 0 else None
-        next_level = df.iloc[i + 1]['Level'] if i + 1 < len(df) else None
-        next_unit = str(df.iloc[i + 1]['Unit']).strip().lower() if i + 1 < len(df) else ''
+        level = df.iloc[i]['Lvl']
+        unit = str(df.iloc[i]['U/M']).strip().lower()
+
+        prev_level = df.iloc[i - 1]['Lvl'] if i > 0 else None
+        next_level = df.iloc[i + 1]['Lvl'] if i + 1 < len(df) else None
+        next_unit = str(df.iloc[i + 1]['U/M']).strip().lower() if i + 1 < len(df) else ''
 
         if level == 1 and unit in ['pcs', 'm', 'm3']:
             if next_level == 2 and next_unit == 'kg':
@@ -40,7 +40,7 @@ def classify_rows(df):
             classifications.append('single')  # fallback
     return classifications
 
-# Add a new classification column based on logic
+# Add a new classification column
 bom_df['row_type'] = classify_rows(bom_df)
 
 # Process rows
@@ -81,9 +81,7 @@ while i < len(bom_df):
         print(f"Unknown classification at row {i}, skipping.")
         i += 1
 
-# Write to Excel
+# Write output
 output_df = pd.DataFrame(output_rows)
 output_df.to_excel(OUTPUT_FILE, index=False)
 print(f"Done! Output written to {OUTPUT_FILE}")
-
-
