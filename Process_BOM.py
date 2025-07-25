@@ -1,67 +1,114 @@
 import pandas as pd
 
 # ======= CONFIGURATION =======
-INPUT_FILE = "BOM.xlsx"
+INPUT_FILE = "BOM_2.xlsx"
 OUTPUT_FILE = "output.xlsx"
 
 # Mapping of output columns:
 # Keys = column labels in output file
-# Values = (source_column_letter, row_offset)
-# row_offset: 0 = current row, 1 = next row (for material, etc.)
-
+# Values = (source_column_name, row_offset)
 columns_to_extract = {
-    'Component Name': ('Description', 0),              # column F, same row
-    'Component Weight': ('Weight', 0),            # column Q, same row
-    'Material Name': ('Description', 1),               # column F, next row
-    'Material Fraction': ('Weight', 1),           # column Q, next row
+    'Component Name': ('Description', 0),       # column F, same row
+    'Component Weight': ('Weight', 0),          # column Q, same row
+    'Material Name': ('Description', 1),        # column F, next row
+    'Material Fraction': ('Weight', 1),         # column Q, next row
 }
 # =============================
 
-# Load the BOM file
 print("Loading BOM...")
 bom_df = pd.read_excel(INPUT_FILE)
 
-# Prepare output rows
+def get_material_match_index(i, df):
+    current_level = df.iloc[i]['Lvl']
+    current_unit = str(df.iloc[i]['U/M']).strip().lower()
+
+    prev_level = df.iloc[i - 1]['Lvl'] if i > 0 else None
+    next_level = df.iloc[i + 1]['Lvl'] if i + 1 < len(df) else None
+    prev_unit = str(df.iloc[i - 1]['U/M']).strip().lower() if i > 0 else ''
+    next_unit = str(df.iloc[i + 1]['U/M']).strip().lower() if i + 1 < len(df) else ''
+
+    component_units = {'pcs', 'm', 'm3'}
+    material_unit = 'kg'
+
+    if current_level == 1 and current_unit in component_units:
+        if next_level == 2 and next_unit == material_unit:
+            return i + 1
+
+    if current_level == 2 and prev_level == 1 and current_unit == material_unit:
+        return i - 1
+
+    if current_level == 2 and next_level == 3 and next_unit == material_unit:
+        return i + 1
+
+    if current_level == 3 and prev_level == 2 and current_unit == material_unit:
+        return i - 1
+
+    if current_level == 3 and next_level == 4 and next_unit == material_unit:
+        return i + 1
+
+    if current_level == 4 and prev_level == 3 and current_unit == material_unit:
+        return i - 1
+
+    return None
+
+
+# Determine type of each row (single, paired, skip)
+def classify_rows(df):
+    classifications = []
+    for i in range(len(df)):
+        matched_index = get_material_match_index(i, df)
+
+        if matched_index == i + 1:
+            classifications.append('paired')
+        elif matched_index is not None and matched_index < i:
+            classifications.append('skip')
+        else:
+            classifications.append('single')
+    return classifications
+
+
+# Add a new classification column
+bom_df['row_type'] = classify_rows(bom_df)
+
+# Process rows
 output_rows = []
 i = 0
 while i < len(bom_df):
-    row = bom_df.iloc[i]
-    p_value = str(row['Description 7']).strip().lower()
+    row_type = bom_df.iloc[i]['row_type']
 
-    if p_value == 'single':
+    if row_type == 'single':
+        row = bom_df.iloc[i]
         data = {}
         for label, (col_name, offset) in columns_to_extract.items():
             if offset == 0:
                 data[label] = row[col_name]
             else:
-                data[label] = ''  # No material info for single
+                data[label] = ''
         output_rows.append(data)
         i += 1
 
-    elif p_value == 'paired':
+    elif row_type == 'paired':
         if i + 1 < len(bom_df):
-            component_row = row
+            component_row = bom_df.iloc[i]
             material_row = bom_df.iloc[i + 1]
             data = {}
             for label, (col_name, offset) in columns_to_extract.items():
                 source_row = component_row if offset == 0 else material_row
                 data[label] = source_row[col_name]
             output_rows.append(data)
-            i += 2  # skip material row next time
+            i += 2
         else:
             print(f"Warning: 'Paired' row at {i} has no next row.")
             i += 1
 
-    elif p_value == 'skip':
-        i += 1  # skip this row
+    elif row_type == 'skip':
+        i += 1  # skip
 
     else:
-        print(f"Warning: Unknown P value '{row['Description 7']}' at row {i}")
+        print(f"Unknown classification at row {i}, skipping.")
         i += 1
 
-
-# Create output DataFrame and write to Excel
+# Write output
 output_df = pd.DataFrame(output_rows)
 output_df.to_excel(OUTPUT_FILE, index=False)
 print(f"Done! Output written to {OUTPUT_FILE}")
-
