@@ -1,13 +1,17 @@
 import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Alignment
+from openpyxl import load_workbook
 
 def process_bom(input_file, master_file, output_file):
     columns_to_extract = {
-        'Component Name': ('Description', 0),
-        'Component Weight': ('Weight', 0),
-        'Material Name': ('Description', 1),
-        'Material Fraction': ('Material Fraction', 0),
+         'Component Name': ('Description', 0),
+         'Component Weight': ('Weight', 0),
+         'Material Name': ('Description', 1),
+         'Material Fraction': ('Material Fraction', 0),
+         'EPD Material': ('EPD Material', 0),
     }
 
     print("Loading BOM...")
@@ -15,13 +19,19 @@ def process_bom(input_file, master_file, output_file):
 
     print("Loading Master Data...")
     master_df = pd.read_excel(master_file, sheet_name="MasterData")
+
+    # Strip whitespace to avoid key mismatch
+    master_df['Item no'] = master_df['Item no'].astype(str).str.strip()
+    master_df['EPD Material'] = master_df['EPD Material'].astype(str).str.strip()
+    bom_df['Component no'] = bom_df['Component no'].astype(str).str.strip()
+
     weight_lookup = dict(zip(master_df['Item no'], master_df['Net weight']))
+    epd_material_lookup = dict(zip(master_df['Item no'], master_df['EPD Material']))
 
     Q1_row = bom_df[bom_df['Lvl'] == 1]
     Q1 = Q1_row['Quantity'].iloc[0] if not Q1_row.empty else 1
 
     def calculate_weight(row):
-        lvl = row['Lvl']
         unit = str(row['U/M']).strip().lower()
         qty = row['Quantity']
         comp_no = row['Component no']
@@ -73,7 +83,6 @@ def process_bom(input_file, master_file, output_file):
         classifications = []
         for i in range(len(df)):
             matched_index = get_material_match_index(i, df)
-
             if matched_index == i + 1:
                 classifications.append('paired')
             elif matched_index is not None and matched_index < i:
@@ -91,10 +100,13 @@ def process_bom(input_file, master_file, output_file):
 
         if row_type == 'single':
             row = bom_df.iloc[i]
+            comp_no = row['Component no']
             data = {}
             for label, (col_name, offset) in columns_to_extract.items():
                 if label == 'Material Fraction':
                     data[label] = ''
+                elif label == 'EPD Material':
+                    data[label] = epd_material_lookup.get(comp_no, '')
                 else:
                     data[label] = row[col_name] if offset == 0 else ''
             output_rows.append(data)
@@ -104,16 +116,17 @@ def process_bom(input_file, master_file, output_file):
             if i + 1 < len(bom_df):
                 component_row = bom_df.iloc[i]
                 material_row = bom_df.iloc[i + 1]
-                data = {}
-                for label, (col_name, offset) in columns_to_extract.items():
-                    if label == 'Material Fraction':
-                        material_weight = material_row['Weight']
-                        component_weight = component_row['Weight']
-                        fraction = material_weight / component_weight if component_weight else 0
-                        data[label] = round(fraction, 2)
-                    else:
-                        source_row = component_row if offset == 0 else material_row
-                        data[label] = source_row[col_name]
+                component_weight = component_row['Weight']
+                material_weight = material_row['Weight']
+                fraction = material_weight / component_weight if component_weight else 0
+                material_comp_no = material_row['Component no']  # <- for EPD lookup
+                data = {
+                    'Component Name': component_row['Description'],
+                    'Component Weight': component_weight,
+                    'Material Name': material_row['Description'],
+                    'Material Fraction': round(fraction, 2),
+                    'EPD Material': epd_material_lookup.get(material_comp_no, '')  # <- FIXED HERE
+                }
                 output_rows.append(data)
                 i += 2
             else:
@@ -125,14 +138,16 @@ def process_bom(input_file, master_file, output_file):
             paired_index = get_material_match_index(i, bom_df)
             if paired_index is not None:
                 paired_component = bom_df.iloc[paired_index]
-                qty = material_row['Quantity']
                 comp_weight = paired_component['Weight']
+                qty = material_row['Quantity']
                 fraction = qty / comp_weight if comp_weight else 0
+                material_comp_no = material_row['Component no']
                 data = {
                     'Component Name': paired_component['Description'],
                     'Component Weight': comp_weight,
                     'Material Name': material_row['Description'],
                     'Material Fraction': round(fraction, 2),
+                    'EPD Material': epd_material_lookup.get(material_comp_no, '')  # <- FIXED HERE
                 }
                 output_rows.append(data)
             else:
@@ -144,7 +159,41 @@ def process_bom(input_file, master_file, output_file):
             i += 1
 
     output_df = pd.DataFrame(output_rows)
+
+    # Rename and reorder columns
+    output_df.rename(columns={
+        'EPD Material': 'EPDName',
+        'Component Weight': 'EPDQuantity',
+        'Component Name': 'Comments',
+        'Material Fraction': 'UnitCalc',
+        # 'Material Name' remains unchanged
+    }, inplace=True)
+
+    column_order = ['EPDName', 'EPDQuantity', 'Comments', 'UnitCalc', 'Material Name']
+    output_df = output_df[column_order]
+
+    # Write to Excel
     output_df.to_excel(output_file, index=False)
+
+    # Format Excel file
+    wb = load_workbook(output_file)
+    ws = wb.active
+
+    # Set alignment and auto column width
+    left_align = Alignment(horizontal='left', vertical='center')
+
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = left_align
+
+    for col_idx, column_cells in enumerate(ws.columns, 1):
+        max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+        adjusted_width = max_length + 2
+        ws.column_dimensions[get_column_letter(col_idx)].width = adjusted_width
+
+    wb.save(output_file)
+
+
 
 # --- GUI ---
 
